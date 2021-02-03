@@ -2,57 +2,39 @@ import express, { NextFunction, Request, Response } from 'express';
 import bodyParser from 'body-parser';
 import {filterImageFromURL, deleteLocalFiles} from './util/util';
 import jwt from 'jsonwebtoken';
+import { BAD_REQUEST, OK } from './response-codes';
+import { timeoutMiddleware, verifyToken } from './middleware';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 // https://image.shutterstock.com/image-photo/glodok-jakarta-indonesia-dec-6-600w-1869727789.jpg
 (async () => {
-
   // Init the Express application
   const app = express();
 
   // Set the network port
   const port = process.env.PORT || 8082;
+  const secret = process.env.SECRET || 'S3CR3T';
+  const reqTimeout = Number((process.env.REQUEST_TIMEOUT || 5000));
   
   // Use the body parser middleware for post requests
   app.use(bodyParser.json());
 
   // Add a timeout to request
-  app.use((req, res, next) => {
-    res.setTimeout(5000, () => {
-      res.status(408).send({
-        error: 'Request timed out',
-        details: `Request could have timed out due to poorly formatted url
-          or image filtering taking longer than is required.
-        `
-      });
-    });
-    next();
-  });
+  app.use(timeoutMiddleware);
 
   // generate token
-  app.post('/auth', async(req, res) => {
+  app.post('/auth', async(req: Request, res: Response) => {
     const { key } = req.body;
-    if (!key) return res.status(500).send({ error: 'Bad request. Please enter your "key" in the request body '});
+    if (!key) return res.status(BAD_REQUEST).send({ error: 'Bad request. Please enter your "key" in the request body '});
 
-    const authToken = jwt.sign({ key }, 'SECRET', { expiresIn: '24h' });
-    res.status(200).send({
+    const authToken = jwt.sign({ key }, secret, { expiresIn: '24h' });
+    res.status(OK).send({
       Authorization: `Bearer ${authToken}`,
       instruction: 'Add your Authorization and Key in the request header when passing your image url'
     });
   });
-
-  // authorization middleware
-  const verify = async (req: Request, res: Response, next: NextFunction) => {
-    const { authorization, key } = req.headers;
-    try {
-      const decodedToken: Record<string, any> = (jwt.verify(authorization.split(' ')[1], 'SECRET') as object);
-      console.log(decodedToken.key, key);
-      return decodedToken.key.toString() === key ?
-        next() :
-        res.status(401).send({ error: 'Token and key mismatch '});  
-    } catch(e) {
-      res.status(401).send({ error: 'Unable to verify user. Be sure your auth token is not expired' })
-    }
-  }
 
   // @TODO1 IMPLEMENT A RESTFUL ENDPOINT
   // GET /filteredimage?image_url={{URL}}
@@ -67,14 +49,14 @@ import jwt from 'jsonwebtoken';
   //    image_url: URL of a publicly accessible image
   // RETURNS
   //   the filtered image file [!!TIP res.sendFile(filteredpath); might be useful]
-  app.get('/filteredimage', verify, async( req, res ) => {
+  app.get('/filteredimage', verifyToken, async( req, res ) => {
     try {
       const validUrl = new URL(req.query.image_url);
       const filteredImage = await filterImageFromURL(validUrl.toString());
-      res.status(200).sendFile(filteredImage);
+      res.status(OK).sendFile(filteredImage);
       setTimeout(() => deleteLocalFiles([filteredImage]), 0);
     } catch (e) {
-      return res.status(200).send({ 'message': 'invalid url' });
+      return res.status(OK).send({ 'message': 'invalid url' });
     }
   });
 
@@ -87,7 +69,6 @@ import jwt from 'jsonwebtoken';
   app.get( "/", async ( req, res ) => {
     res.send("try GET /filteredimage?image_url={{}}")
   } );
-  
 
   // Start the Server
   app.listen( port, () => {
